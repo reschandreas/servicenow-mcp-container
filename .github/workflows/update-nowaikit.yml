@@ -1,0 +1,124 @@
+# Automatic nowaikit version updates
+#
+# This workflow:
+# 1. Checks weekly for new nowaikit releases on npm
+# 2. Updates the Dockerfile ARG if a new version is available
+# 3. Commits directly to main
+# 4. Bumps the minor version and pushes a Git tag -> triggers ci-docker.yml
+#
+# Requires the GH_PAT secret (a personal access token with contents:write)
+# so the tag push triggers ci-docker.yml. GITHUB_TOKEN alone cannot trigger
+# downstream workflows.
+
+name: Update nowaikit
+
+on:
+  schedule:
+    - cron: '0 5 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-nowaikit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest nowaikit version
+        id: latest
+        run: |
+          LATEST=$(npm view nowaikit version)
+          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest nowaikit version: $LATEST"
+
+      - name: Get current version from Dockerfile
+        id: current
+        run: |
+          CURRENT=$(grep "^ARG NOWAIKIT_VERSION=" Dockerfile | cut -d= -f2)
+          echo "version=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current nowaikit version: $CURRENT"
+
+      - name: Check if update is needed
+        id: check
+        run: |
+          if [ "${{ steps.latest.outputs.version }}" != "${{ steps.current.outputs.version }}" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "Update needed: ${{ steps.current.outputs.version }} -> ${{ steps.latest.outputs.version }}"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Already up to date"
+          fi
+
+      - name: Update Dockerfile
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          sed -i "s/^ARG NOWAIKIT_VERSION=.*/ARG NOWAIKIT_VERSION=${{ steps.latest.outputs.version }}/" Dockerfile
+          echo "Updated Dockerfile:"
+          grep "ARG NOWAIKIT_VERSION" Dockerfile
+
+      - name: Commit changes
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile
+          git commit -m "chore(deps): update nowaikit to ${{ steps.latest.outputs.version }}"
+          git push
+
+      - name: Bump minor version and push tag
+        if: steps.check.outputs.needs_update == 'true'
+        id: bump
+        run: |
+          git fetch --tags
+
+          LATEST_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v1.0.0"
+          fi
+          echo "Latest tag: $LATEST_TAG"
+
+          MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | tr -d 'v')
+          MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
+          if [ -z "$MAJOR" ]; then
+            MAJOR=1
+          fi
+          if [ -z "$MINOR" ]; then
+            MINOR=0
+          fi
+
+          NEW_MINOR=$((MINOR + 1))
+          NEW_TAG="v${MAJOR}.${NEW_MINOR}.0"
+          echo "New tag: $NEW_TAG"
+
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already exists, skipping push"
+            echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          git tag "$NEW_TAG"
+          git push "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git" "$NEW_TAG"
+
+      - name: Summary
+        run: |
+          echo "## nowaikit Version Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | Version |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Previous | \`${{ steps.current.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Latest | \`${{ steps.latest.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.needs_update }}" == "true" ]; then
+            echo "**Status:** Updated and committed to main." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Release tag:** \`${{ steps.bump.outputs.new_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** Already up to date. No changes made." >> $GITHUB_STEP_SUMMARY
+          fi

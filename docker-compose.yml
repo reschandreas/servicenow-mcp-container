@@ -1,0 +1,15 @@
+services:
+  servicenow-mcp:
+    build: .
+    image: servicenow-mcp:latest
+    container_name: servicenow-mcp
+    env_file: .env
+    environment:
+      - TRANSPORT=${TRANSPORT:-stdio}
+      - PORT=${PORT:-3000}
+      - HOST=0.0.0.0
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
