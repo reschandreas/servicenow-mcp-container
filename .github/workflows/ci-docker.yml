@@ -3,7 +3,7 @@ name: create container image
 on:
   pull_request:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * 6'
   workflow_dispatch:
   push:
     branches:
@@ -39,6 +39,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract MCP version
+        id: mcp-version
+        run: |
+          VERSION=$(grep "^ARG NOWAIKIT_VERSION=" Dockerfile | cut -d= -f2 | tr -d '[:space:]')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "MCP (nowaikit) version: $VERSION"
+
       - name: Compute Tag
         uses: actions/github-script@v9
         id: compute-tag
@@ -67,7 +74,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=version-{{date 'YYYYMMDD' tz='UTC'}}
+            type=raw,value=${{ steps.mcp-version.outputs.version }}-{{date 'YYYYMMDD' tz='UTC'}}
             type=sha
             type=raw,value=${{ steps.compute-tag.outputs.result }},enable=${{ steps.compute-tag.outputs.result != '' }}
             type=raw,value=latest,enable={{is_default_branch}}
